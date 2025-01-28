@@ -17,7 +17,7 @@ impl Production {
         pool: &MySqlPool,
         element_id: i32,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        let productions: Vec<Production> = sqlx::query_as!(
+        let productions = sqlx::query_as!(
             Production,
             r#"
             SELECT id, element_id, quantite_produite, unite_production, date_de_production

@@ -115,8 +115,10 @@ impl User {
     
         if is_valid {
             let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET doit être défini");
+            
+            // Définir l'expiration à 48 heures
             let expiration = Utc::now()
-                .checked_add_signed(chrono::Duration::days(1))
+                .checked_add_signed(chrono::Duration::days(2)) // 48 heures
                 .expect("Erreur de génération de la durée")
                 .timestamp() as usize;
     
@@ -137,6 +139,7 @@ impl User {
             Err(SqlxError::RowNotFound)
         }
     }
+    
     
 
     /// Récupérer tous les utilisateurs

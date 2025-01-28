@@ -505,6 +505,112 @@ async fn get_productions_by_element_id(
     }
 }
 
+async fn get_domaines_for_user(
+    pool: web::Data<MySqlPool>,
+    req: HttpRequest,
+) -> impl Responder {
+    // Récupérer les claims du token
+    let claims = match user::validate_token(&req) {
+        Ok(claims) => claims,
+        Err(e) => return e.into(), // Retourne une erreur 401 si le token est invalide
+    };
+
+    // Récupérer l'utilisateur connecté à partir des claims
+    let user_email = claims.sub;
+
+    // Optionnel : Trouver l'user_id à partir de l'email (si user_id n'est pas dans le JWT)
+    let user_id_result = sqlx::query_scalar!(
+        r#"
+        SELECT id FROM users WHERE email = ?
+        "#,
+        user_email
+    )
+    .fetch_one(pool.get_ref())
+    .await;
+
+    let user_id = match user_id_result {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::InternalServerError().body("Erreur : utilisateur non trouvé"),
+    };
+
+    // Récupérer les domaines pour cet utilisateur
+    let domaines = Domaine::get_all_by_user_id(pool.get_ref(), user_id).await;
+
+    match domaines {
+        Ok(domaines) => HttpResponse::Ok().json(domaines),
+        Err(_) => HttpResponse::InternalServerError().body("Erreur lors de la récupération des domaines"),
+    }
+}
+
+async fn get_connected_user(
+    pool: web::Data<MySqlPool>,
+    req: HttpRequest,
+) -> impl Responder {
+    // Valider le token JWT pour récupérer les claims
+    let claims = match user::validate_token(&req) {
+        Ok(claims) => claims,
+        Err(e) => return e.into(), // Retourne une erreur 401 si le token est invalide
+    };
+
+    // Extraire l'email (ou autre identifiant) des claims
+    let user_email = claims.sub;
+
+    // Récupérer les informations de l'utilisateur à partir de l'email
+    let user = sqlx::query_as!(
+        User,
+        r#"
+        SELECT id, type_user_id, nom, prenom, email, numero_telephone, mot_de_passe
+        FROM users
+        WHERE email = ?
+        "#,
+        user_email
+    )
+    .fetch_one(pool.get_ref())
+    .await;
+
+    match user {
+        Ok(user) => HttpResponse::Ok().json(user), // Retourne les informations de l'utilisateur
+        Err(_) => HttpResponse::NotFound().body("Utilisateur non trouvé"), // Retourne une erreur si l'utilisateur n'est pas trouvé
+    }
+}
+
+async fn add_domaine_for_user(
+    pool: web::Data<MySqlPool>,
+    req: HttpRequest,
+    form: web::Json<CreateDomaine>,
+) -> impl Responder {
+    // Récupérer les claims à partir du token JWT
+    let claims = match user::validate_token(&req) {
+        Ok(claims) => claims,
+        Err(e) => return e.into(), // Retourne une erreur 401 si le token est invalide
+    };
+
+    // Extraire l'email de l'utilisateur connecté depuis les claims
+    let user_email = claims.sub;
+
+    // Trouver l'ID de l'utilisateur à partir de l'email
+    let user_id_result = sqlx::query_scalar!(
+        "SELECT id FROM users WHERE email = ?",
+        user_email
+    )
+    .fetch_one(pool.get_ref())
+    .await;
+
+    let user_id = match user_id_result {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::InternalServerError().body("Erreur : utilisateur non trouvé"),
+    };
+
+    // Utiliser la méthode `create` pour insérer le domaine
+    match Domaine::create(pool.get_ref(), user_id, form.nom_domaine.clone()).await {
+        Ok(domaine) => HttpResponse::Ok().json(domaine), // Retourne le domaine ajouté
+        Err(_) => HttpResponse::InternalServerError().body("Erreur lors de la création du domaine"),
+    }
+}
+
+
+
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
@@ -522,10 +628,13 @@ async fn main() -> std::io::Result<()> {
             // Ajout du middleware CORS
             .wrap(
                 Cors::default()
-                    .allow_any_origin() // Autorise toutes les origines (Changez en production)
+                    .allow_any_origin() // Autorise toutes les origines
                     .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"]) // Méthodes autorisées
-                    .allowed_headers(vec![actix_web::http::header::CONTENT_TYPE]) // En-têtes autorisés
-                    .max_age(3600), // Cache CORS pendant 1 heure
+                    .allowed_headers(vec![
+                        actix_web::http::header::CONTENT_TYPE,
+                        actix_web::http::header::AUTHORIZATION,
+                    ]) // Autorise Content-Type et Authorization
+                    .max_age(3600), // Cache des options CORS pendant 1 heure
             )
             // Routes existantes
             .route("/", web::get().to(hello_world))
@@ -534,15 +643,22 @@ async fn main() -> std::io::Result<()> {
             .route("/users", web::post().to(add_user))
             .route("/users", web::get().to(get_users))
             .route("/login", web::post().to(login_user))
+
             .route("/users/{id}", web::put().to(update_user))
             .route("/users/{id}", web::delete().to(delete_user))
             .route("/users/{id}", web::get().to(get_user_by_id))
+            .route("/users/user/connected", web::get().to(get_connected_user))
+            
 
             .route("/domaines", web::post().to(add_domaine))
             .route("/domaines/user/{user_id}", web::get().to(get_domaines_by_user_id))
             .route("/domaines", web::get().to(get_domaines))
             .route("/domaines/{id}", web::put().to(update_domaine))
             .route("/domaines/{id}", web::delete().to(delete_domaine))
+            .route("/domaines/user", web::get().to(get_domaines_for_user))
+            .route("/domaines/user/add", web::post().to(add_domaine_for_user))
+
+
 
             .route("/type_exploitation", web::post().to(add_type_exploitation))
             .route("/type_exploitation", web::get().to(get_all_types_exploitation))
